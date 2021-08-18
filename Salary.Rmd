@@ -1,0 +1,335 @@
+---
+title: "Salary Prediction"
+author: "Nikhil Munakhyia"
+Submitted to: "Dr Faiz Hamid"
+date: "27/07/2021"
+output: word_document
+---
+
+```{r}
+library(readr)
+
+library(dplyr)
+library(caTools)#for splitting
+library(CatEncoders) # label & one hot encoding
+library(lmtest) 
+library(e1071)# For svr model
+library(Metrics)
+library(caret)
+library(car)
+library(dummies)
+library(superml)
+library(car)
+
+```
+
+```{R}
+
+dat <- read_csv("census.csv")
+head(dat,10)
+
+```
+```{r}
+
+sum(duplicated(dat))
+```
+# We can see that we have 3462 duplicate data 
+ We remove it.
+## Checking missing values
+```{r}
+library(tidyr)
+missing_data <- dat %>% summarise_all(funs(sum(is.na(.))/n()))
+missing_data <- gather(missing_data, key = "variables", value = "percent_missing")
+ggplot(missing_data, aes(x = reorder(variables, percent_missing), y = percent_missing)) +
+  geom_bar(stat = "identity", fill = "#E7B800", aes(color = I('white')), size = 0.3)+
+  xlab('variables')+
+  coord_flip()+ 
+  theme_bw()
+ 
+
+```
+# No missing values present in the data.
+## DATA CLEANING
+```{r}
+table(dat$workclass)
+```
+#Combined ‘Never-worked’ and ‘Without-pay’ into Unemployed as they meant the same
+```{r}
+unemployed <- function(job){
+  job <- as.character(job)
+  if (job=='Never-worked' | job=='Without-pay'){
+    return('Unemployed')
+  }else{
+    return(job)
+  }
+}
+dat$workclass <- sapply(dat$workclass,unemployed)
+table(dat$workclass)
+
+```
+#Combine State and Local gov jobs into a category called SL-gov and combine self-employed jobs into a category called self-emp 
+
+```{r}
+group_emp <- function(job){
+  if (job=='Local-gov' | job=='State-gov'){
+    return('SL-gov')
+  }else if (job=='Self-emp-inc' | job=='Self-emp-not-inc'){
+    return('self-emp')
+  }else{
+    return(job)
+  }
+}
+dat$workclass <- sapply(dat$workclass,group_emp)
+table(dat$workclass)
+```
+```{r}
+table(dat$maritalstatus)
+```
+#No need of transforming martial status  
+```{r}
+Asia <- c('China','Hong','India','Iran','Cambodia','Japan', 'Laos' ,
+          'Philippines' ,'Vietnam' ,'Taiwan', 'Thailand')
+
+North.America <- c('Canada','United-States','Puerto-Rico' )
+
+Europe <- c('England' ,'France', 'Germany' ,'Greece','Holand-Netherlands','Hungary',
+            'Ireland','Italy','Poland','Portugal','Scotland','Yugoslavia')
+
+Latin.and.South.America <- c('Columbia','Cuba','Dominican-Republic','Ecuador',
+                             'El-Salvador','Guatemala','Haiti','Honduras',
+                             'Mexico','Nicaragua','Outlying-US(Guam-USVI-etc)','Peru',
+                             'Jamaica','Trinadad&Tobago')
+Other <- c('South')
+
+group_country <- function(ctry){
+  if (ctry %in% Asia){
+    return('Asia')
+  }else if (ctry %in% North.America){
+    return('North.America')
+  }else if (ctry %in% Europe){
+    return('Europe')
+  }else if (ctry %in% Latin.and.South.America){
+    return('Latin.and.South.America')
+  }else{
+    return('Other')      
+  }
+}
+
+dat$nativecountry <- sapply(dat$nativecountry,group_country)
+table(dat$nativecountry)
+```
+```{r}
+head(dat,10)
+```
+##Factorize the newly created column
+```{r}
+
+dat$workclass <- sapply(dat$workclass,factor)
+dat$nativecountry <- sapply(dat$`nativecountry`,factor)
+dat$maritalstatus <- sapply(dat$`maritalstatus`,factor)
+dat$occupation <- sapply(dat$occupation,factor)
+dat$relationship <- sapply(dat$relationship,factor)
+dat$over50k <- sapply(dat$over50k,factor)
+dat$education<- sapply(dat$education,factor)
+dat$sex<- sapply(dat$sex,factor)
+dat$race<- sapply(dat$race,factor)
+```
+##CHECKING OUTLIERS
+```{r}
+boxplot(dat$capitalgain)
+```
+```{r}
+Q <- quantile(dat$capitalgain,probs = c(.25,.75),na.rm = TRUE)
+iqr <- IQR(dat$capitalgain)
+up <-  Q[2]+1.5*iqr # Upper Range  
+low<- Q[1]-1.5*iqr # Lower Range???
+eliminated<- subset(dat,dat$capitalgain > (Q[1] - 1.5*iqr) & dat$capitalgain < (Q[2]+1.5*iqr))                                                                                     
+eliminated
+```
+#No outliers present
+## Correlation for variables with numeric values
+```{r}
+#corrletaion
+M <- cor(dat[,c(9:11)])
+
+col <- colorRampPalette(c("#BB4444", "#EE9988", "#FFFFFF", "#77AADD", "#4477AA"))
+corrplot::corrplot(M, method="color", col=col(200),  
+         type="upper", order="hclust", 
+         addCoef.col = "black", # Add coefficient of correlation
+         tl.col="black", tl.srt=45, #Text label color and rotation
+)
+
+```
+## Exploratory Data Analysis And Chi-Square Test
+1) Against Native Country
+```{r}
+library(CGPfunctions)
+# plotting and checking independence usingc chi.square test 
+PlotXTabs(dat,nativecountry,over50k,plottype = "side")
+```
+#we see in both the incomes most data of people are from north america 
+```{r}
+PlotXTabs2(dat,nativecountry,over50k)
+```
+2) Against Workclass 
+```{r}
+PlotXTabs(dat,workclass,over50k,plottype = "side")
+
+```
+#We can see that most of the people in both salary works in Private 
+```{r}
+PlotXTabs2(dat,workclass,over50k)
+
+```
+```{r}
+sex1 <- as.data.frame(table(dat$sex))
+library(ggplot2)
+#simple male female plot
+ggplot(data =sex1,aes(x=Var1,y=Freq,fill=Var1))+
+  geom_bar(stat="identity")+geom_text(label=sex1$Freq) 
+```
+# Majority of earning people are male
+## Setting Hypothesis
+#H0: Two variable are independant
+#H1; Two var are dependent
+
+#If we get Chi calculated less than Chi tabulated we reject the null hypothesis.
+
+```{r}
+df <- data.frame(table(dat$sex,dat$race,dat$over50k))
+
+table <-xtabs(~dat$race+dat$over50k,dat) 
+as.data.frame(table)
+```
+```{r}
+chisq.test(table)
+```
+We reject null hypothesis
+```{r}
+ggplot(df, aes(x =Var1, y =Freq,fill=Var2))+geom_bar(stat = "identity")+
+  geom_bar(stat="identity", fill="steelblue")+
+  geom_text(aes(label=Var3), vjust=-0.3, size=3.5)+
+  theme_minimal()+geom_bar(aes(fill =Var2), stat="identity")+facet_wrap(~Var3)+
+  xlab("gender")+ylab("frequency")
+
+```
+# The majority of people are white.
+
+##education and salary
+```{r}
+df2 <- data.frame((table(dat$education,dat$over50k)))
+
+table2 <- xtabs(~dat$education+dat$over50k,dat)
+chisq.test(table2)
+```
+#again reject null hypothesis.
+```{r}
+ggplot(df2, aes( y=Var1, x =Freq,fill=Freq))+geom_bar(stat = "identity")+
+  geom_bar(stat="identity", fill="steelblue")+
+  facet_wrap(~Var2)+geom_text(aes(label=Freq))
+```
+#Hs graduates are the highest earners that earns less than 50K
+#In more than 50K Bachelors earns most
+
+##Relationship and salary
+```{r}
+df3 <- data.frame(table(dat$relationship,dat$sex,dat$over50k))
+
+table3 <- xtabs(~dat$relationship+dat$over50k,dat)
+chisq.test(table3)
+#again reject null hypothesis
+```
+```{r}
+ggplot(df3, aes( x=Var1, y=Freq,fill=Var2))+geom_bar(stat = "identity")+
+  geom_bar(stat="identity", fill="steelblue")+
+  geom_text(aes(label=Freq),vjust=.18, size=3.5)+
+  theme_minimal()+geom_bar(aes(fill =Var2), stat="identity")+facet_wrap(~Var3)
+```
+#Mostly Husband are the one earning. there is female husband that earns less than 50K
+
+#race& salary
+```{r}
+df5 <- data.frame(table(dat$race,dat$over50k))
+table5 <- xtabs(~dat$race+dat$over50k,dat)
+chisq.test(table5)
+```
+#Again Reject
+```{r}
+ggplot(df5, aes( y=Var1, x =Freq,fill=Freq))+geom_bar(stat = "identity")+
+  geom_bar(stat="identity", fill="steelblue")+
+  facet_wrap(~Var2)+geom_text(aes(label=Freq))
+```
+#Mostly people earning are white
+##Age  Plot
+```{r}
+
+df6 <- data.frame(table(dat$age))
+ggplot(df6,aes(x=Var1,y=Freq,fill=Freq))+geom_bar(stat="identity")+geom_text(aes(label=Freq),vjust=-1.8)
+
+```
+```{r}
+
+df7 <- data.frame(table(dat$age,dat$over50k))
+table6 <- xtabs(~dat$age+dat$over50k,dat)
+chisq.test(table6)
+```
+Again reject
+```{r}
+ggplot(df7, aes( y=Var1, x =Freq,fill=Freq))+geom_bar(stat = "identity")+
+  geom_bar(stat="identity", fill="steelblue")+
+  facet_wrap(~Var2)+geom_text(aes(label=Freq))
+```
+
+##ENDING WITH THE EDA PART
+Now moving ahead
+## splitting data into train and test 
+```{r}
+split <- sample.split(dat$over50k,.90)
+train <- subset(dat,split==TRUE)
+test <- subset(dat,split==FALSE)
+dim(train)
+dim(test)
+na_cols <- colSums(is.na(train)) / nrow(train)
+na_cols <- names(na_cols[which(na_cols > 0.9)])
+
+cat_cols <- names(train)[sapply(train, is.character)]
+
+for(c in cat_cols){
+  lbl <- LabelEncoder$new()
+  lbl$fit(c(train[[c]], test[[c]]))
+  train[[c]] <- lbl$transform(train[[c]])
+  test[[c]] <- lbl$transform(test[[c]])
+}
+dim(train)
+```
+## 1) Logistic regression
+```{r}
+glm_model = glm(over50k ~ ., family = binomial(logit), data = train)
+test$predicted.income = predict(glm_model, newdata=test)
+set.seed(1)
+test$income_class <- ifelse(test$predicted.income > 0.5, ">50K","<=50K")
+glm_con <-confusionMatrix(as.factor( test$income_class),as.factor( test$over50k))
+glm_con
+```
+# We get the Metrics
+Accuracy : 0.8445    Higher the better
+Sensitivity : 0.9642 Higher the better          
+Specificity : 0.4668 Lower the better
+## 2) Decision Tree
+```{r}
+library(rpart)
+library(rpart.plot)
+tree_model <- rpart(over50k ~ ., train, method = "class")
+all_probs <- predict(tree_model, test, type = "prob")
+rpart.plot(tree_model,  box.palette="RdBu", shadow.col="gray")
+test$income_class <- ifelse(all_probs[,1]>0.5,"<=50K",">50K")
+dt_con <- confusionMatrix(as.factor(test$income_class),test$over50k)
+dt_con 
+
+```
+#For Decision Tree we get following metrics
+Accuracy : 0.842
+Sensitivity : 0.9498          
+Specificity : 0.5020 
+## We can see that Decision Tree have higher accuracy then Logistic regression.
+#We can see that Maritial statues, Working Hours and Sex really matters if you want to earn more than 50K per year. In contrary, the working class is not that important. Generally speaking, you will get equal opportunity if you work hard enough, no matter what kinds of job are you doing.
